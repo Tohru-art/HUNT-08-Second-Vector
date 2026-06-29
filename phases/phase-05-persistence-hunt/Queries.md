@@ -1,6 +1,6 @@
 # Phase 05 - Persistence Hunt: Queries
 
-> Query log for Phase 05. These queries identify mailbox-rule persistence, concealment behavior, external forwarding, and the targeted mailbox.
+> Query log for Phase 05. These queries identify the concealment rule, confirm what it did with mail, isolate the external forwarding rule, and prove both rules targeted the same finance mailbox.
 
 ---
 
@@ -12,116 +12,74 @@
 ```kql
 CloudAppEvents
 | where ActionType == "New-InboxRule"
-| where RawEventData has "Invoice Processing"
-| project Timestamp,
-          ActionType,
-          AccountDisplayName,
-          ObjectName,
-          RawEventData
+| project Timestamp, AccountDisplayName, Application, ActionType, ObjectName, RawEventData
 | order by Timestamp asc
 ```
 
-**Expected Result:** Mailbox rule `Invoice Processing`.
+**Expected Result:** A mailbox rule named `Invoice Processing`.
 
-**Pivot Produced:** Concealment rule name.
+**Pivot Produced:** Concealment rule, `Invoice Processing`.
 
-**Investigation Value:** Identifies the rule used to hide verification mail from the victim.
+**Investigation Value:** Identifies the rule the attacker created to suppress finance-related mail.
 
 ---
 
 ## Q19 - Where the Hidden Mail Goes
 
-**Purpose:** Determine whether the concealment rule deleted messages or moved them.
+**Purpose:** Determine whether the rule deleted messages or moved them elsewhere.
 
 **KQL Query**
 ```kql
 CloudAppEvents
 | where ActionType == "New-InboxRule"
 | where RawEventData has "Invoice Processing"
-| project Timestamp,
-          ActionType,
-          AccountDisplayName,
-          ObjectName,
-          RawEventData
-| order by Timestamp asc
+| project Timestamp, ObjectName, RawEventData
 ```
 
-**Expected Result:** Messages were moved to a folder rather than deleted.
+**Expected Result:** Rule behavior shows a move action rather than deletion.
 
-**Pivot Produced:** Move action, not delete action.
+**Pivot Produced:** Messages were moved to a hidden or low-visibility folder, not deleted.
 
-**Investigation Value:** Shows the attacker used stealthy concealment instead of destructive deletion.
+**Investigation Value:** Confirms concealment over destruction, which matters for recovery and explains why the fraud stayed hidden.
 
 ---
 
 ## Q20 - The Exfiltration Rule
 
-**Purpose:** Identify mailbox rules that forward mail externally.
+**Purpose:** Find inbox rules that forwarded mail to an external recipient.
 
 **KQL Query**
 ```kql
 CloudAppEvents
 | where ActionType == "New-InboxRule"
-| where RawEventData has_any ("ForwardTo", "RedirectTo", "ForwardAsAttachmentTo")
-| project Timestamp,
-          ActionType,
-          AccountDisplayName,
-          ObjectName,
-          RawEventData
+| where RawEventData has "ForwardTo"
+| project Timestamp, AccountDisplayName, ObjectName, RawEventData
 | order by Timestamp asc
 ```
 
-**Expected Result:** External forwarding destination `merovingian1337@proton.me`.
+**Expected Result:** External forwarding to `merovingian1337@proton.me`.
 
 **Pivot Produced:** Exfiltration destination, `merovingian1337@proton.me`.
 
-**Investigation Value:** Confirms off-tenant mail exfiltration through an inbox rule.
+**Investigation Value:** Confirms the attacker created live external mail exfiltration.
 
 ---
 
 ## Q21 - The Both-Rules Target
 
-**Purpose:** Confirm which mailbox both malicious rules targeted.
+**Purpose:** Confirm both mailbox rules were created to manipulate mail for the same finance contact.
 
 **KQL Query**
 ```kql
 CloudAppEvents
 | where ActionType == "New-InboxRule"
-| where RawEventData has_any ("Invoice Processing", "merovingian1337@proton.me", "proton.me")
-| project Timestamp,
-          ActionType,
-          AccountDisplayName,
-          ObjectName,
-          RawEventData
+| where RawEventData has "j.reynolds@lognpacific.org"
+| project Timestamp, AccountDisplayName, ObjectName, RawEventData
 | order by Timestamp asc
 ```
 
-**Expected Result:** `j.reynolds@lognpacific.org`
+**Expected Result:** Rule conditions reference `j.reynolds@lognpacific.org`.
 
-**Pivot Produced:** Targeted mailbox, `j.reynolds@lognpacific.org`.
+**Pivot Produced:** Targeted mailbox or sender condition tied to `j.reynolds@lognpacific.org`.
 
-**Investigation Value:** Links the mailbox-rule persistence directly to the Phase 04 fraud target.
-
----
-
-## Supporting Query - All Inbox Rule Activity
-
-**Purpose:** Review all inbox rule creation events in the case window.
-
-**KQL Query**
-```kql
-CloudAppEvents
-| where ActionType == "New-InboxRule"
-| project Timestamp,
-          ActionType,
-          AccountDisplayName,
-          ObjectName,
-          RawEventData
-| order by Timestamp asc
-```
-
-**Expected Result:** Shows both malicious inbox rules and their parameters.
-
-**Pivot Produced:** Complete mailbox-rule timeline.
-
-**Investigation Value:** Preserves a reproducible view of mailbox persistence activity.
+**Investigation Value:** Links the persistence directly to the fraud target and proves the rules were built to suppress payment verification replies.
