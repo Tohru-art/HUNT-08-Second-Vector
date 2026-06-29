@@ -50,12 +50,13 @@ SigninLogs
 
 ## Q09 - Failed Attempts Before Entry
 
-**Purpose:** Identify any failed authentication attempts preceding the successful session to characterize the access pattern and anchor the timeline.
+**Purpose:** Identify failed authentication attempts preceding the successful session to characterize the access pattern and anchor the timeline.
 
 **KQL Query**
 ```kql
 SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
+| where IPAddress == "103.69.224.136"
 | where ResultType != 0
 | summarize FailedAttempts = count(), FirstSeen = min(TimeGenerated),
             LastSeen = max(TimeGenerated)
@@ -63,9 +64,9 @@ SigninLogs
 | order by FailedAttempts desc
 ```
 
-**Expected Result:** Failed sign-in records appear ahead of the first successful (`ResultType == 0`) attacker sign-in.
+**Expected Result:** Returns **2** failed sign-in attempts before successful access.
 
-**Pivot Produced:** Pre-entry failure pattern (timeline anchor).
+**Pivot Produced:** Failed attempt count, `2`.
 
 **Investigation Value:** Distinguishes attacker probing from the legitimate user's activity and sharpens the start-of-compromise timestamp.
 
@@ -73,23 +74,31 @@ SigninLogs
 
 ## Q10 - Blast Radius of One Token
 
-**Purpose:** Measure how many distinct cloud resources were reachable from the single compromised session.
+**Purpose:** Measure how many distinct cloud applications/resources were reachable from the single compromised session.
 
 **KQL Query**
 ```kql
 SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
-| summarize Resources = make_set(ResourceDisplayName),
-            Apps = make_set(AppDisplayName)
-        by UserPrincipalName
+| summarize AppCount = dcount(AppDisplayName), Apps = make_set(AppDisplayName)
+        by UserPrincipalName, IPAddress
+| order by AppCount desc
 ```
 
-**Expected Result:** The session touched multiple first-party resources (mail, directory, Graph), not a single app.
+**Expected Result:** Returns **7** applications/resources:
 
-**Pivot Produced:** Blast radius, full user cloud surface from one token.
+- `One Outlook Web`
+- `OfficeHome`
+- `Microsoft Teams Web Client`
+- `Office 365 SharePoint Online`
+- `SharePoint Online Web Client Extensibility`
+- `Microsoft Flow Portal`
+- `App Service`
 
-**Investigation Value:** Quantifies the cost of the single dismissed risk detection and motivates session-level (not app-level) containment.
+**Pivot Produced:** Blast radius, `7` Microsoft 365 applications/resources from one token.
+
+**Investigation Value:** Quantifies the cost of the single dismissed risk detection and motivates session-level, not app-level, containment.
 
 ---
 
@@ -104,12 +113,13 @@ SigninLogs
 | where IPAddress == "103.69.224.136"
 | summarize SignInCount = count(), FirstSeen = min(TimeGenerated),
             LastSeen = max(TimeGenerated),
-            Correlations = dcount(CorrelationId)
-        by IPAddress
+            Apps = make_set(AppDisplayName)
+        by SessionId, IPAddress
+| order by SignInCount desc
 ```
 
-**Expected Result:** Activity resolves to a single continuous session window from the attacker IP.
+**Expected Result:** The attacker activity resolves to session ID `005d431a-380b-1f5e-e554-16d5010dc28e`.
 
-**Pivot Produced:** Session continuity, one sustained session.
+**Pivot Produced:** Session ID, `005d431a-380b-1f5e-e554-16d5010dc28e`.
 
 **Investigation Value:** Confirms a live, persistent session is the unit of compromise, the reason revocation is the primary containment action.
