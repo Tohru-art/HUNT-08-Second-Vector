@@ -1,6 +1,6 @@
 # Phase 04 - The Fraud: Queries
 
-> Query log for Phase 04. Focus is the BEC: isolating the fraudulent banking-change message, reconstructing the impersonated thread, identifying the target, and separating attacker IPs from platform infrastructure.
+> Query log for Phase 04. Focus is the BEC: isolating the fraudulent banking-change message, reconstructing the mimicked payment thread, identifying the target, and separating attacker IPs from platform infrastructure.
 
 ---
 
@@ -11,7 +11,7 @@
 **KQL Query**
 ```kql
 EmailEvents
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
+| where Timestamp between (datetime(2026-06-10) .. datetime(2026-06-20))
 | where Subject has "Updated Banking Details"
 | project Timestamp, SenderFromAddress, SenderMailFromAddress,
           RecipientEmailAddress, Subject, SenderIPv4, NetworkMessageId
@@ -20,7 +20,7 @@ EmailEvents
 
 **Expected Result:** The message **"Updated Banking Details - Pacific IT Monthly"** is returned with its sender, recipient, and sending IP.
 
-**Pivot Produced:** Fraud subject + the recipient and sender-IP pivots.
+**Pivot Produced:** Fraud subject + recipient + sender-IP pivots.
 
 **Investigation Value:** Anchors the entire fraud phase on a single identified message and exposes the IPs and recipient used in the following queries.
 
@@ -28,23 +28,22 @@ EmailEvents
 
 ## Q15 - The Thread They Mimicked
 
-**Purpose:** Reconstruct the conversation the attacker grafted onto, using the subject family and timeline.
+**Purpose:** Identify the legitimate payment workflow thread the attacker reviewed and mimicked.
 
 **KQL Query**
 ```kql
 EmailEvents
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
-| where Subject has "Updated Banking Details"
-| project Timestamp, Subject, SenderFromAddress, RecipientEmailAddress,
-          SenderIPv4, DeliveryAction
+| where Timestamp between (datetime(2026-06-10) .. datetime(2026-06-20))
+| where Subject has_any ("payment", "approval", "invoice", "vendor", "bank", "wire")
+| project Timestamp, Subject, SenderFromAddress, RecipientEmailAddress, SenderIPv4
 | order by Timestamp asc
 ```
 
-**Expected Result:** The ordered thread family, `Updated Banking Details` → `Re:` → `FW:` → `Undeliverable: FW...` at 04:13 / 12:40 / 12:41 / 12:42.
+**Expected Result:** The historical payment thread **`Q1 Vendor Payment Schedule - Review Required`** appears as the legitimate workflow the attacker mimicked.
 
-**Pivot Produced:** The mimicked thread and its timeline.
+**Pivot Produced:** Mimicked thread, `Q1 Vendor Payment Schedule - Review Required`.
 
-**Investigation Value:** Proves the fraud was built on an existing trusted conversation, the social-engineering core of the BEC.
+**Investigation Value:** Proves the attacker used real payment workflow context to make the fraudulent banking-details message more credible.
 
 ---
 
@@ -55,55 +54,44 @@ EmailEvents
 **KQL Query**
 ```kql
 EmailEvents
-| where Subject has "Updated Banking Details"
-| where Subject !startswith "Undeliverable"
-| summarize Messages = count(), FirstSeen = min(Timestamp)
-        by RecipientEmailAddress
-| order by Messages desc
+| where Subject == "Updated Banking Details - Pacific IT Monthly"
+| project Timestamp, Subject, SenderFromAddress, RecipientEmailAddress, SenderIPv4
+| order by Timestamp asc
 ```
 
-**Expected Result:** The finance/payment recipient who received the banking-change instruction.
+**Expected Result:** The fraud target is **`j.reynolds@lognpacific.org`**.
 
-**Pivot Produced:** Fraud target (payment processor).
+**Pivot Produced:** Fraud target, `j.reynolds@lognpacific.org`.
 
-**Investigation Value:** Names the human the attacker is attempting to manipulate into authorizing fraud, the objective of the operation.
+**Investigation Value:** Names the human the attacker attempted to manipulate into authorizing fraud, and links directly to the mailbox targeted by the Phase 05 persistence rules.
 
 ---
 
 ## Q17 - Second Channel Reinforcement
 
-**Purpose:** Determine whether the deception was reinforced beyond the single email (additional forwards/replies or a collaboration-channel nudge).
+**Purpose:** Determine whether the deception was reinforced outside the single email thread.
 
 **KQL Query**
 ```kql
-EmailEvents
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
-| where Subject has "Updated Banking Details"
-| summarize Events = count() by Subject, SenderIPv4, bin(Timestamp, 1m)
+CloudAppEvents
+| where Timestamp between (datetime(2026-06-10) .. datetime(2026-06-20))
+| where Application has "Teams" or RawEventData has "Teams"
+| where RawEventData has_any ("banking", "Updated Banking", "j.reynolds@lognpacific.org")
+| project Timestamp, Application, ActionType, AccountDisplayName, RawEventData
 | order by Timestamp asc
 ```
 
-**Supporting (collaboration channel):**
-```kql
-CloudAppEvents
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
-| where ActionType has_any ("ChatCreated", "MessageSent", "Send")
-| where RawEventData has "banking" or RawEventData has "Updated Banking"
-| project TimeGenerated, ActionType, AccountDisplayName, RawEventData
-| order by TimeGenerated asc
-```
+**Expected Result:** Microsoft Teams activity appears around the same fraud window.
 
-**Expected Result:** The forward/reply/undeliverable cluster (and any chat signal) reinforcing the request within the same short window.
+**Pivot Produced:** Second channel, `Microsoft Teams`.
 
-**Pivot Produced:** Reinforcement pattern (urgency/credibility mechanism).
-
-**Investigation Value:** Demonstrates the attacker applied multi-touch pressure rather than a single email, raising the fraud's success probability.
+**Investigation Value:** Demonstrates the attacker reinforced the BEC through a trusted collaboration channel, raising the credibility of the request.
 
 ---
 
 ### Supporting query: Sender IP attribution
 
-**Purpose:** Separate attacker-originated sending IPs from Microsoft platform infrastructure (e.g., NDR responses).
+**Purpose:** Separate attacker-originated sending IPs from Microsoft platform infrastructure such as NDR responses.
 
 **KQL Query**
 ```kql
@@ -113,7 +101,7 @@ EmailEvents
 | order by Messages desc
 ```
 
-**Expected Result:** `103.69.224.136` and `185.130.187.4` attributed to the attacker; `20.190.190.224` attributable to Microsoft service infrastructure (NDR).
+**Expected Result:** `103.69.224.136` and `185.130.187.4` are attacker-associated; `20.190.190.224` is Microsoft service infrastructure.
 
 **Pivot Produced:** Clean attacker-vs-infrastructure IP split.
 
