@@ -35,20 +35,29 @@ MicrosoftGraphActivityLogs
 
 ## Q31 - The Automation Identity
 
-**Purpose:** Resolve the application identity behind the automation from its App ID.
+**Purpose:** Extract the application identity that signed the Graph request responsible for forwarding activity.
 
 **KQL Query**
 ```kql
-SigninLogs
-| where AppId == "7ab7862c-4c57-491e-8a45-d52a7e023983"
-| distinct AppDisplayName, AppId
+MicrosoftGraphActivityLogs
+| where RequestMethod == "POST"
+| where RequestUri has "forward"
+    or RequestUri has "sendMail"
+    or RequestUri has "messages"
+| project TimeGenerated,
+          IPAddress,
+          RequestMethod,
+          RequestUri,
+          AppId,
+          ServicePrincipalId
+| order by TimeGenerated asc
 ```
 
-**Expected Result:** The App ID resolves to the automation identity tied to the Flow Portal / Power Automate.
+**Expected Result:** The Graph mail action contains App ID **`7ab7862c-4c57-491e-8a45-d52a7e023983`**.
 
 **Pivot Produced:** Automation App ID, `7ab7862c-4c57-491e-8a45-d52a7e023983`.
 
-**Investigation Value:** Turns "an automation did this" into a named, removable object for targeted containment and tenant hunting.
+**Investigation Value:** Turns "an automation did this" into a named application identity for targeted containment and tenant-wide hunting.
 
 ---
 
@@ -89,7 +98,7 @@ search "103.69.224.136"
 | order by $table asc
 ```
 
-**Expected Result:** The attacker IP appears in **7** in-scope telemetry tables.
+**Expected Result:** The attacker IP appears in **7** official in-scope telemetry tables after excluding tables outside the data dictionary.
 
 **Pivot Produced:** Single-actor correlation across 7 tables.
 
@@ -107,10 +116,12 @@ SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
 | summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated),
-            SignIns = count()
+            SignIns = count(), Apps = make_set(AppDisplayName)
+        by SessionId, IPAddress
+| order by SignIns desc
 ```
 
-**Expected Result:** A sustained session window confirming live access.
+**Expected Result:** A sustained session window associated with the attacker activity.
 
 **Decision Produced:** First containment action, **revoke sessions**.
 
@@ -126,6 +137,7 @@ SigninLogs
 ```kql
 SigninLogs
 | where AppId == "7ab7862c-4c57-491e-8a45-d52a7e023983"
+   or AppDisplayName has_any ("Flow", "Power Automate")
 | distinct AppDisplayName, AppId
 ```
 
@@ -146,6 +158,7 @@ SigninLogs
 SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | project
+    TimeGenerated,
     IPAddress,
     AuthenticationRequirement,
     ConditionalAccessStatus,
@@ -155,7 +168,7 @@ SigninLogs
 | order by TimeGenerated asc
 ```
 
-**Expected Result:** `ConditionalAccessStatus == notApplied`, sign-ins succeeded with no CA evaluation.
+**Expected Result:** `ConditionalAccessStatus == notApplied`, and the foreign single-factor sign-ins were allowed.
 
 **Pivot Produced:** Control gap, Conditional Access not applied.
 
