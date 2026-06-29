@@ -1,56 +1,68 @@
 # Phase 02 - Session Scope: Queries
 
-> Query log for Phase 02. Focus is the authentication mechanism: how the session survived MFA and how far one token reached.
+> Query log for Phase 02. These queries validate token reuse, Conditional Access non-application, pre-entry failures, application blast radius, and the continuous session identifier.
 
 ---
 
 ## Q07 - How the Session Beat MFA
 
-**Purpose:** Determine the authentication requirement the platform enforced on the attacker's sign-ins, to test whether MFA was satisfied or bypassed.
+**Purpose:** Determine whether the attacker completed MFA or reused an already trusted session.
 
 **KQL Query**
 ```kql
 SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
-| project TimeGenerated, AuthenticationRequirement, AuthenticationDetails,
-          ResultType, ResultDescription
+| project TimeGenerated,
+          IPAddress,
+          AppDisplayName,
+          AuthenticationRequirement,
+          AuthenticationDetails,
+          ConditionalAccessStatus,
+          ResultType,
+          ResultDescription
 | order by TimeGenerated asc
 ```
 
-**Expected Result:** Sign-ins return `AuthenticationRequirement == singleFactorAuthentication`; the `AuthenticationDetails` blob shows no fresh MFA challenge, consistent with refresh-token / KMSI reuse.
+**Expected Result:** `AuthenticationRequirement == singleFactorAuthentication`, consistent with Keep Me Signed In / refresh-token reuse.
 
-**Pivot Produced:** Mechanism, token persistence (Keep Me Signed In), MFA bypassed via reuse rather than satisfied.
+**Pivot Produced:** Token persistence mechanism.
 
-**Investigation Value:** Establishes that the attacker did not defeat MFA. This reframes containment toward session revocation.
+**Investigation Value:** Shows the attacker did not defeat MFA. They reused a trusted session.
 
 ---
 
 ## Q08 - The Control Surface That Let Them In
 
-**Purpose:** Determine whether Conditional Access evaluated and acted on the attacker's sign-ins.
+**Purpose:** Determine whether Conditional Access applied to the suspicious sign-ins.
 
 **KQL Query**
 ```kql
 SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
-| project TimeGenerated, ConditionalAccessStatus, ConditionalAccessPolicies,
-          ResultType
+| project TimeGenerated,
+          IPAddress,
+          AppDisplayName,
+          AuthenticationRequirement,
+          ConditionalAccessStatus,
+          ConditionalAccessPolicies,
+          ResultType,
+          ResultDescription
 | order by TimeGenerated asc
 ```
 
-**Expected Result:** `ConditionalAccessStatus == notApplied`, no CA policy was in scope.
+**Expected Result:** `ConditionalAccessStatus == notApplied`
 
-**Pivot Produced:** Control gap, Conditional Access notApplied.
+**Pivot Produced:** Conditional Access coverage gap.
 
-**Investigation Value:** Identifies the missing control that should have re-challenged or blocked the session. Feeds directly into Phase 08 Q36 (the control that never fired).
+**Investigation Value:** Explains why no MFA challenge or block occurred.
 
 ---
 
 ## Q09 - Failed Attempts Before Entry
 
-**Purpose:** Identify failed authentication attempts preceding the successful session to characterize the access pattern and anchor the timeline.
+**Purpose:** Count failed authentication attempts from the attacker IP before successful access.
 
 **KQL Query**
 ```kql
@@ -58,23 +70,21 @@ SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
 | where ResultType != 0
-| summarize FailedAttempts = count(), FirstSeen = min(TimeGenerated),
-            LastSeen = max(TimeGenerated)
-        by IPAddress, ResultType, ResultDescription
-| order by FailedAttempts desc
+| project TimeGenerated, IPAddress, AppDisplayName, ResultType, ResultDescription
+| order by TimeGenerated asc
 ```
 
-**Expected Result:** Returns **2** failed sign-in attempts before successful access.
+**Expected Result:** `2` failed sign-in attempts.
 
 **Pivot Produced:** Failed attempt count, `2`.
 
-**Investigation Value:** Distinguishes attacker probing from the legitimate user's activity and sharpens the start-of-compromise timestamp.
+**Investigation Value:** Establishes pre-entry probing before successful access.
 
 ---
 
 ## Q10 - Blast Radius of One Token
 
-**Purpose:** Measure how many distinct cloud applications/resources were reachable from the single compromised session.
+**Purpose:** Count how many Microsoft 365 applications/resources were reached from the attacker activity.
 
 **KQL Query**
 ```kql
@@ -82,44 +92,36 @@ SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
 | summarize AppCount = dcount(AppDisplayName), Apps = make_set(AppDisplayName)
-        by UserPrincipalName, IPAddress
-| order by AppCount desc
+| project AppCount, Apps
 ```
 
-**Expected Result:** Returns **7** applications/resources:
+**Expected Result:** `7` applications/resources.
 
-- `One Outlook Web`
-- `OfficeHome`
-- `Microsoft Teams Web Client`
-- `Office 365 SharePoint Online`
-- `SharePoint Online Web Client Extensibility`
-- `Microsoft Flow Portal`
-- `App Service`
+**Pivot Produced:** Application blast radius, `7`.
 
-**Pivot Produced:** Blast radius, `7` Microsoft 365 applications/resources from one token.
-
-**Investigation Value:** Quantifies the cost of the single dismissed risk detection and motivates session-level, not app-level, containment.
+**Investigation Value:** Shows one token reached multiple cloud surfaces, not only Outlook.
 
 ---
 
 ## Q11 - One Continuous Session
 
-**Purpose:** Confirm whether the attacker operated from one sustained session or re-authenticated repeatedly.
+**Purpose:** Identify the sustained session used by the attacker.
 
 **KQL Query**
 ```kql
 SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
-| summarize SignInCount = count(), FirstSeen = min(TimeGenerated),
+| summarize SignIns = count(),
+            FirstSeen = min(TimeGenerated),
             LastSeen = max(TimeGenerated),
             Apps = make_set(AppDisplayName)
         by SessionId, IPAddress
-| order by SignInCount desc
+| order by SignIns desc
 ```
 
-**Expected Result:** The attacker activity resolves to session ID `005d431a-380b-1f5e-e554-16d5010dc28e`.
+**Expected Result:** Session ID `005d431a-380b-1f5e-e554-16d5010dc28e`.
 
-**Pivot Produced:** Session ID, `005d431a-380b-1f5e-e554-16d5010dc28e`.
+**Pivot Produced:** Continuous session ID, `005d431a-380b-1f5e-e554-16d5010dc28e`.
 
-**Investigation Value:** Confirms a live, persistent session is the unit of compromise, the reason revocation is the primary containment action.
+**Investigation Value:** Supports session revocation as the first containment action.
